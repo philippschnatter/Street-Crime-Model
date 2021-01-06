@@ -1,0 +1,2066 @@
+<?xml version="1.0"?>
+
+<!-- Evolver Model Specification File -->
+<RePastEvolver:EvolverModelSpec xmlns:RePastEvolver="http://src.uchicago.edu/simbuilder/">
+<RePastEvolver:EvolverProject  ProjectDirectory="C:\Program Files (x86)\ArcGIS\Agent Analyst\output" PackageName="default_package" ProjectName="Environment" ClassPath="" consoleErr="true" consoleOut="true" >
+<Description>
+<![CDATA[
+
+]]>
+</Description>
+<RePastEvolver:EvolverModel  ModelName="AdvancedVectorMovement" DisplayName="Advanced Vector Movement" Class="class uchicago.src.simbuilder.beans.gis.DefaultGISModelProducer" gisPackage="ArcGIS" >
+  <RePastEvolver:action name="initAgents" sigReadOnly="true" retType="void" imports="uchicago.src.sim.util.Random" paramNames="">
+<![CDATA[
+def initAgents():
+  
+  print "initAgents with the following Parameters:"
+  print "TIME_SAFE Parameter: "+self.TIME_SAFE
+  
+  if self.MODE == "D":
+    print "DAY MODEL simulating "+self.MODE_MULTIPLICATOR+" days"
+  elif self.MODE == "M":
+    print "MONTH MODEL simulating "+self.MODE_MULTIPLICATOR+" months"
+  elif self.MODE == "Y":
+    print "YEAR MODEL simulating "+self.MODE_MULTIPLICATOR+" years"
+  else:
+    print "Unspecified time span: MODE must be D, M or Y"
+    self.stop()
+    
+  if self.MODELTYPE == 0:
+    print "normal model -> cops move randomly"
+  elif self.MODELTYPE == 1:
+    print "advanced model -> cops move along a hotspot route"
+  elif self.MODELTYPE == 2:
+    print "experimental mode -> no difference to normal model atm!"
+  else:
+    print "Unspecified MODELTYPE: must be 0 or 1 or 2"
+    self.stop()
+  
+  # Explicitly set the random number generator seed and initialize Random distributions 
+  # Create RNG and set seed                 
+  mtRNG = MersenneTwister(100)
+  #auskommentiert weil der Wert ein Parameter ist
+  #Random.setSeed(100)
+  Random.createUniform()
+  
+  # Initialize model level variables
+  self.initModel()
+  
+  # Process the street nodes for use in the model
+  self.setupPlaces()
+  
+  # Read in the lists of acivity nodes and path nodes for Citizen Activity Spaces
+  self.initActivitySpaces()
+  
+  # Read in the list of hotspot path nodes for Cop routes
+  self.initCopRoutes()
+  
+  # Initialize the activity spaces of agents
+  self.initCitizens()
+  
+  # Check to make sure values in shapefile fields are zero
+  for node as Place in self.places:
+    if  node.totalVisit > 0:
+      node.totalVisit = 0
+      
+    if  node.totPrevent > 0:
+      node.totPrevent = 0
+      
+    if  node.totalRob > 0:
+      node.totalRob = 0
+      
+    if  node.totOpport > 0:
+      node.totOpport = 0 
+      
+    if  node.civPrev > 0:
+      node.civPrev = 0  
+           
+    if  node.copPrev > 0:
+      node.copPrev = 0
+      
+    if  node.copStart > 0:
+      node.copStart = 0  
+      
+    if  node.citiStart > 0:
+      node.citiStart = 0   
+      
+    if  node.crimStart > 0:
+      node.crimStart = 0              
+              
+  # Initialize the cop agents
+  self.initCops()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="updateDisplay" sigReadOnly="true" retType="void" imports="" paramNames="">
+<![CDATA[
+def updateDisplay():
+  self.updateGISDisplay()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="writeAgents" sigReadOnly="true" retType="void" imports="" paramNames="">
+<![CDATA[
+def writeAgents():
+  baseFilePath = "C:\\ESRIPress\\MaputoSim\\Data\\"
+  self.writeAgents(self.places, baseFilePath + "nodes_ftl.shp")
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="setupPlaces" sigReadOnly="false" retType="void" imports="java.io.BufferedReader java.io.FileReader java.util.StringTokenizer" paramNames="">
+<![CDATA[
+def setupPlaces():
+  print "setup places"
+  # Put Places in a HashMap where the key is the strnode-id 
+  # Creates the map
+  self.placeMap = LinkedHashMap()
+  index = 0
+
+  # Add the places to the hashmap 
+  for currentPlace as Place in self.places: 
+    
+    specNode = "0"
+    specNode = String.valueOf(currentPlace.getStrcl_()) #former STRCL_   in caps
+    specNodeNew = Float(specNode)
+    self.placeMap.put(specNodeNew, currentPlace)
+    currentPlace.setMyNeighbors(ArrayList())
+    currentPlace.setStrcl_(index)
+    index = index + 1
+
+  # Read the neighbors file and set each nodes neighbors.
+  # The neighbors files lists the active node and the neighboring
+  # nodes of that active node.  The map created above is used to
+  # get the neighbors for each active node.
+
+  fileName = "C:/ESRIPress/MaputoSim/Data/adj_nodes_final.csv"
+  reader = BufferedReader(FileReader(fileName))
+  line = reader.readLine()
+    
+  while(line):
+    tokenizer = StringTokenizer(line, ",")
+
+    if(tokenizer.hasMoreTokens()):
+      activeNode = tokenizer.nextToken().trim()
+      actNodeObject = Float(activeNode)
+      currentPlace = (Place)self.placeMap.get(actNodeObject) 
+      nghs = currentPlace.getMyNeighbors()
+      
+      while (tokenizer.hasMoreTokens()):
+        ngh = tokenizer.nextToken()
+        currentPlace.myNeighbors.add(ngh)
+
+    # Read the line
+    line = reader.readLine()
+
+  # Close the reader  
+  reader.close()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="incrementModel" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def incrementModel():
+
+  # Loop through the nodes with citizens and get the number of visits 
+  for occupied as ActiveNode in self.activeNodes:
+    # Check agents at each of the active nodes 
+    #print "The Node being evaluated is: ", occupied.strnode
+
+    # Initialize variables in action
+    numAgentsAtNode = occupied.getAgentList().size()
+    #print "Number of Agents:", numAgentsAtNode + " at node: " + occupied.strnode
+
+    # Log presence of agents on street node
+    # Retrieving the place by converting to a float object
+    # muss denormalisiert werden, da placeMap bei 0 beginnt
+    intNodeId = Integer.valueOf(occupied.strnode).intValue()-1
+    occupiedObject = Float(intNodeId)
+    currentPlace = (Place)self.placeMap.get(occupiedObject)
+    
+    # Log fact that agents visited a node in the shapefile
+    if (currentPlace != None):
+      currentPlace.totalVisit = currentPlace.totalVisit + numAgentsAtNode
+      #currentPlace.visits = currentPlace.visits + numAgentsAtNode
+      #print "NEW Number of Visits: ", currentPlace.totalVisit   
+    else:
+      print "Unable to log visit at strnode: " + occupied.strnode + " during tick: " + self.modelStep
+      
+  # Determine Robberies
+  self.determineRobs()
+
+  #Clear the agents from the activeNodes class  
+  self.activeNodes.clear() 
+      
+  # Increment the modelStep field
+  runtime = 0
+  if self.MODE == "D":
+    runtime = self.MODEL_DAY * self.MODE_MULTIPLICATOR
+  elif self.MODE == "M":
+    runtime = self.MODEL_MONTH * self.MODE_MULTIPLICATOR
+  elif self.MODE == "Y":
+    runtime = self.MODEL_YEAR * self.MODE_MULTIPLICATOR
+  else:
+    print "Unspecified time span: MODE must be D, M or Y"
+
+  if self.modelStep < runtime:    
+    self.modelStep = self.modelStep + 1
+  else:
+      
+    if self.MODE == "D":
+      print self.MODE_MULTIPLICATOR+" DAYS OVER"
+    elif self.MODE == "M":
+      print self.MODE_MULTIPLICATOR+" MONTHS OVER"
+    elif self.MODE == "Y":
+      print self.MODE_MULTIPLICATOR+" YEARS OVER"
+    self.writeFinalAgents()
+    self.writeCitizenOut()
+    self.writeCopsOut()
+    self.writeDailyReport()
+    self.writeRobberiesOut()
+    
+    # some logging output to console
+    print "SIMULATION ENDS at with the following Parameters:"
+    print "TIME_SAFE Parameter: "+self.TIME_SAFE
+    
+    # randomNumber repast argument 1592378654870 und 100
+    print "RngSeed is: " + self.RngSeed
+  
+    if self.MODE == "D":
+      print "DAY MODEL simulating "+self.MODE_MULTIPLICATOR+" days"
+    elif self.MODE == "M":
+      print "MONTH MODEL simulating "+self.MODE_MULTIPLICATOR+" months"
+    elif self.MODE == "Y":
+      print "YEAR MODEL simulating "+self.MODE_MULTIPLICATOR+" years"
+    else:
+      print "Unspecified time span: MODE must be D, M or Y"
+      self.stop()
+    
+    if self.MODELTYPE == 0:
+      print "normal model -> cops move randomly"
+    elif self.MODELTYPE == 1:
+      print "advanced model -> cops move along a hotspot route"
+    elif self.MODELTYPE == 2:
+      print "experimental mode :0 -> no difference to normal model atm!"
+    else:
+      print "Unspecified MODELTYPE: must be 0 or 1 or 2"
+      self.stop()
+  
+    self.stop()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="initModel" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def initModel():
+  # Set static field values for model run
+  self.modelStep = 0
+  
+  self.dailyRobberies = ArrayList()
+  self.dailyConvergences = ArrayList()
+  self.dailyCopPrevented = ArrayList()
+  self.dailyCivilianPrevented = ArrayList()
+  self.dailyNoRobCozWealth = ArrayList()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="initCitizens" sigReadOnly="false" retType="void" imports="cern.jet.random.engine.MersenneTwister cern.jet.random.Normal uchicago.src.sim.util.Random" paramNames="">
+<![CDATA[
+def initCitizens():
+ 
+  print "Inside initCitizens"
+ 
+  # set values for time to stay at home, work, rec1, rec2 (also write to citizen field)
+  print "Number of citizens: " + self.citizens.size()
+  Random.createUniform()
+  # SET the activity node and activity path
+  for citizens as Citizen in self.citizens:
+    nodeFL = Float(citizens.Home)  
+    node = (Place)self.placeMap.get(nodeFL)
+    #print "Street node home: " + citizens.Home
+
+    #print "Citizen starts at node: " + node.STRCL_
+    citizens.home = citizens.Home
+    #if citizens.name == "a571":
+    #  print "Citizen named "+citizens.name+" and his home node: "+citizens.home+" and work: "+citizens.work
+    citizens.work = citizens.Work
+    citizens.rec1 = citizens.Rec1
+    citizens.rec2 = citizens.Rec2
+    citizens.pathNodes = citizens.PathNodes
+    citizens.setLocation(node)
+    citizens.setStrnode(node.strcl_)
+    
+    citizens.location.citiStart = 1
+            
+    #print "Name " + citizens.name
+    #print "Main ", citizens.main
+    
+    # Distribute random numbers to variables
+    # Specify how long each citizen stays at home
+    minsOfDaySafe = self.MODEL_DAY * self.TIME_SAFE/100
+    minsOfDayHome = minsOfDaySafe - self.TIME_WORK
+    Random.createNormal(minsOfDayHome, 60) 
+    timeHomeNormal = Random.normal.nextInt()
+    if timeHomeNormal < 1:
+      citizens.timeHome = 1
+    else:
+      citizens.timeHome = timeHomeNormal      
+    
+    # Specify how long each citizen stays at work
+    Random.createNormal(self.TIME_WORK, 60) 
+    citizens.timeWork = Random.normal.nextInt()
+    
+    # Specify the minimum time to pass until the next Robbery
+    Random.createNormal(self.TIMETO_REOFFEND, self.TIMETO_REOFFEND/10) 
+    citizens.timeToReoffend = Random.normal.nextInt()
+    
+    # compute initial timeToReOffend by a Uniform probability (1 bis 7 Tage bis zum naechsten raub)
+    # TODO zum testen:
+    # reoffendProbability = Random.uniform.nextIntFromTo(0, 6)
+    # citizens.curTimeNextRob = citizens.timeToReoffend * reoffendProbability
+    citizens.curTimeNextRob = citizens.timeToReoffend
+    
+    # Randomly set <UNEMP_RATE>% of all citizens unemployed
+    unemp = Random.uniform.nextIntFromTo(1, 1000);
+    if unemp <= self.UNEMP_RATE*10:
+      citizens.employed = false
+      
+    # Randomly set 10% of all citizens potentially criminal
+    crime = Random.uniform.nextIntFromTo(1, 1000);
+    if crime <= self.PROPENSITY*10:
+      citizens.criminalPropensity = true
+      
+    # Specify initial wealth for each citizen
+    Random.createNormal(self.NORM_WEALTH, self.NORM_WEALTH*2)
+    tempWealth = Random.normal.nextInt()
+    if tempWealth < 10: 
+      citizens.initialWealth = 10
+      citizens.wealth = 10
+    else:
+      citizens.initialWealth = tempWealth
+      citizens.wealth = tempWealth
+    
+    # Specify income for each citizen with log-normal distribution
+    Random.createNormal(self.NORM_INCOME, self.NORM_INCOME/4) 
+    tempIncomeNormal = Random.normal.nextInt()
+       
+    # print "income for agent "+citizens.name+" is: "+tempIncomeNormal
+   
+    if tempIncomeNormal < 0: 
+      citizens.income = 1
+    else:
+      citizens.income = tempIncomeNormal
+  
+  #for citizens as Citizen in self.citizens:
+   #print "Name: " + citizens.getName()
+   #print "Home: " + citizens.getHome()
+   #print "Main: " +citizens.getMain()
+   #print "Rec1: " +citizens.getRec1()
+   #print "Rec2: " +citizens.getRec2()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="initCops" sigReadOnly="false" retType="void" imports="uchicago.src.sim.util.Random" paramNames="">
+<![CDATA[
+def initCops():
+
+  print "Initialize cops"
+  Random.createUniform()
+  hot = 0
+  
+  # decide first 100 of 200 cops move along hotspot route in advanced model
+  # Modeltype can be 0 for normal and 1 for hotspot model
+  if self.MODELTYPE == 1:
+    for cops as Cop in self.cops:  
+      # Randomly set 50% of all cops for hotspot route
+      hot = hot + 1
+      if hot <= 100: # 200 for Testing TODO set to 100!!
+        cops.isHotspotCop = true
+      else:
+        break
+ 
+  # modeltype is 0 = normal model
+  # Randomly assign the remaining cops to a starting location.  
+  # can be 100 or 200   
+  # Use the Places to get the strnode
+  for cops as Cop in self.cops:
+    if cops.isHotspotCop == false:  
+      nodeHasNoNeighbors = true
+      index = 0
+      while nodeHasNoNeighbors == true:                    
+        index = Random.uniform.nextIntFromTo(0, self.NUM_PLACES - 1)
+        currentPlace = (Place)self.placeMap.get(Float(index))            
+        if currentPlace.getMyNeighbors().size() != 0:
+          nodeHasNoNeighbors = false
+          
+      node = (Place)self.places.get(index)
+      # Log that cop started at this node
+      node.copStart = 1
+      cops.setLocation(node)
+      cops.setStrnode(node.strcl_)
+      cops.visited = ArrayList()
+      
+    # cop moves along a path
+    # cops.isHotspotCop == true
+    else:
+      # get random node as startnode from nodeList = hotspot path
+      index = Random.uniform.nextIntFromTo(0, cops.pathNodes.size() - 1)
+      
+      # pathNodes = 411 Nodes of the hotspot path
+      intStartPlaceId = Float(String.valueOf(cops.pathNodes.get(index)))
+      
+      #nodeFL = Float(cops.pathNodes.get(index))
+      startPlace = (Place)self.placeMap.get(intStartPlaceId)
+      
+      # was wollte ich damit bezwecken???
+      # startPlace.copStart = 1 
+      # startPlace ist anscheinend null
+      cops.setLocation(startPlace)
+      cops.setStrnode(startPlace.strcl_)
+      cops.visited = ArrayList()
+      
+      #print "cop named "+cops.name+" and hotspot cop= "+cops.isHotspotCop+" with starting position "+cops.strnode
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="writeFinalAgents" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def writeFinalAgents():
+  print "Writing Final Agents"
+  baseFilePath = "C:\\ESRIPress\\MaputoSim\\Data\\output\\"
+  #safe= int(self.TIME_SAFE*100)   
+  self.writeAgents(self.places, baseFilePath +"strnodes2.shp")
+  
+  # kopie von places in den output ordner speichern
+  outFileName = ""
+  baseFilePath = "C:/ESRIPress/MaputoSim/Data/output"
+  
+  outFileName = baseFilePath + "/places_"+self.TIME_SAFE+"safe_"+self.MODELTYPE+"type_"+self.MODE_MULTIPLICATOR+self.MODE+"mode_"+self.UNEMP_RATE+"unemp_"+self.TIMETO_REOFFEND+"reoffend_"+self.PROPENSITY+"propensity_"+self.RngSeed+"RngSeed.csv"
+  
+  print "Writing places to "+outFileName
+  
+  txtWriter = BufferedWriter(FileWriter(outFileName))
+  columnNames = "id,unique_id,totalVisit,totPrevent,totalRob,totOpport,civPrev,copPrev,copStart,citiStart,crimStart" 
+  intSize = int(columnNames.length()) 
+  txtWriter.write(columnNames,0,intSize) 
+  txtWriter.newLine()
+  
+  for node as Place in self.places: 
+  
+    txtWriter.write(node.id+","+node.unique_id+","+node.totalVisit+","+node.totPrevent+","+node.totalRob+","+node.totOpport+","
+    +node.civPrev+","+node.copPrev+","+node.copStart+","+node.citiStart+","+node.crimStart) 
+    txtWriter.newLine()  
+  
+  txtWriter.close()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="initActivitySpaces" sigReadOnly="false" retType="void" imports="anl.repast.gis.data.dbf.DBFReader" paramNames="">
+<![CDATA[
+def initActivitySpaces():
+  print "init Activity Spaces"
+  ## Read two files.  One file contains the activity nodes for each Citizen.
+  ## The other file has the list of path nodes they traverse to get to the activity nodes.
+  ## Order of activity nodes in file:
+    # Node 0:  HOME
+    # Node 1:  WORK or ACT3
+    # Node 2:  ACT1
+    # Node 3:  ACT2
+
+  # FILE 1:  Read in the list of activity nodes for each agent from individual files and 
+  # assigns to the generic agent class of ActivityNode (group name: activityNodes).
+  
+  # Initialize variables
+  theAgentName = "0"
+  j = 0
+  
+  #outside loop to run through 20 test files for activity space information files (counter is used for both files)
+  for i in range (self.CITIZENS):              #change to 1000 for full model
+    theHome = 0
+    theWork = 0
+    theRec1 = 0
+    theRec2 = 0
+    strNode = 0 
+    positionWork = 0
+    positionRec1 = 0
+    positionRec2 = 0
+    j = i + 1
+    theAgentName = "a" + String.valueOf(j) 
+    #print "Agent name: " + theAgentName
+    fileName = "C:/ESRIPress/MaputoSim/Data/activityNodeFiles/" + theAgentName + ".csv"
+    txtreader = BufferedReader(FileReader(fileName))
+    line = txtreader.readLine()
+    lineNumber = 0
+ 
+    # Loop to read one line at a time, each file in turn
+    while (line):
+      if lineNumber == 0:
+        lineNumber = lineNumber + 1
+        line = txtreader.readLine()
+      tokenizer = StringTokenizer(line, ",")
+      #counter for the four records in each actNode file
+      if lineNumber > 4:      
+        lineNumber = 0
+    
+      # Loop to get all the fields in a particular line
+      if (tokenizer.hasMoreTokens()):
+        strnode = tokenizer.nextToken().trim()
+        # hier muss denormalisiert werden, da in den activityNodeFiles die nodes+1 stehen
+        intNode = int(strnode)-1
+        x = tokenizer.nextToken().trim()
+        y = tokenizer.nextToken().trim()
+        #Conditions to assign intNode number in first line of file 
+        #to Home, second record to Main ....etc.
+        #print "Strnode :", strnode
+        if lineNumber == 1:
+          theHome = intNode
+        elif lineNumber == 2:
+          theWork = intNode
+        elif lineNumber == 3:
+          theRec1 = intNode
+        else:
+          theRec2 = intNode
+        
+        lineNumber = lineNumber + 1
+        line = txtreader.readLine()
+    
+    # Close the file of activity nodes
+    txtreader.close()
+    
+    # FILE 2: Each civilian agent has a list of path nodes they travel to get to 
+    # their activity nodes (one file for each agent):
+  
+    # Read in the list of path nodes for each agent from individual files and 
+    # assign to the generic agent class.
+    #shpFilePath = "./projects/rob_model/pathFiles/" + theAgentName + "nodespath" + ".dbf"
+    shpFilePath = "C:/ESRIPress/MaputoSim/Data/pathFiles/" + theAgentName + "nodePath" + ".dbf"
+   
+    # Create reader and get first field
+    reader = DBFReader(shpFilePath)
+    fieldCount = reader.getFieldCount()
+   
+    # Declaring the list here creates a new one for each file read.  
+    thePathNodeList = ArrayList()
+    while (reader.hasNextRecord()):       		# while reads until there are no more records
+      theObject = reader.nextRecord()     			
+      objList = Arrays.asList(theObject)
+      #print "Field value ", objList.get(0).toString()
+      
+      # aus path files gelesen, die nicht normalisiert sind bzw mit 0 beginnen
+      theStrCurrentNode = objList.get(27).toString()
+      intCurrentNode = Integer.valueOf(theStrCurrentNode).intValue()
+      if intCurrentNode != 0:
+        thePathNodeList.add(objList.get(27)) # Spalte AB = 27
+        
+        # save the int position of activity nodes to citizen fiels to check when citizens reach an activity node
+        if intCurrentNode == theWork and positionWork == 0:
+          positionWork = thePathNodeList.size()-1
+
+        elif intCurrentNode == theRec1 and positionRec1 == 0 and positionWork != 0:
+          positionRec1 = thePathNodeList.size()-1
+
+        elif intCurrentNode == theRec2 and positionRec2 == 0 and positionWork != 0 and positionRec1 != 0:
+          positionRec2 = thePathNodeList.size()-1
+          
+    # Create an individual citizen agent called citizenSet within the loop to read the files in the directory 
+    citizenSet = Citizen()
+    citizenSet.setModel(self)
+  
+    # Assign the values from the file to the agent variables 
+    citizenSet.assignNodeInfo(theAgentName, theHome, theWork, theRec1, theRec2, thePathNodeList, positionWork, positionRec1, positionRec2)
+  
+    # Add an agent to the ActivityNode class with the field values from above
+    self.citizens.add(citizenSet)
+  print "init activity Spaces finished"
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="writeCitizenOut" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def writeCitizenOut():
+  
+  outFileName = ""
+  baseFilePath = "C:/ESRIPress/MaputoSim/Data/output"
+  outFileName = baseFilePath + "/citi_"+self.TIME_SAFE+"safe_"+self.MODELTYPE+"type_"+self.MODE_MULTIPLICATOR+self.MODE+"mode_"+self.UNEMP_RATE+"unemp_"+self.TIMETO_REOFFEND+"reoffend_"+self.PROPENSITY+"propensity_"+self.RngSeed+"RngSeed.csv"
+  
+  print "Writing citizens to "+outFileName
+  
+  txtWriter = BufferedWriter(FileWriter(outFileName))
+  columnNames = "name,initialWealth,wealth,income,timesRobOther,timesGotRobbed,criminalPropensity,cumTimeHome,timePathHomeWork,cumTimeWork,timePathWorkAct1,cumTimeAct1,timePathAct1Act2,cumTimeAct2,timePathAct2Home,cumTimeAct3,cumTimeTraveling,cumTimeNotSafe,cumTimeUnemp,timeHome,timeWork,timeAct1,timeAct2,countRobAct1,countRobAct2,countRobAct3,countRobStreet,countOpportAct1,countOpportAct2,countOpportAct3,countOpportStreet,totalMoneyRobbed,totalMoneyIncome,involvedOpport,curTimeNextRob" 
+  intSize = int(columnNames.length()) 
+  txtWriter.write(columnNames,0,intSize) 
+  txtWriter.newLine()
+
+  i = 0
+  for citizens as Citizen in self.citizens:
+    i = i + 1
+    txtWriter.write(citizens.name+","+citizens.initialWealth+","+citizens.wealth+","+citizens.income+","+citizens.timesRobOther+","+citizens.timesGotRobbed+","+citizens.criminalPropensity+","+citizens.cumTimeHome+","+citizens.timePathHomeWork+","+citizens.cumTimeWork+","+citizens.timePathWorkAct1+","
+    +citizens.cumTimeRec1+","+citizens.timePathAct1Act2+","+citizens.cumTimeRec2+","+citizens.timePathAct2Home+","+citizens.cumTimeRec3+","+citizens.cumTimeTraveling+","+citizens.cumTimeNotSafe+","+citizens.cumTimeUnemp+","+citizens.timeHome+","+citizens.timeWork+","+citizens.timeRec1+","
+    +citizens.timeRec2+","+citizens.countRobRec1+","+citizens.countRobRec2+","+citizens.countRobRec3+","+citizens.countRobStreet+","+citizens.countOpportAct1+","+citizens.countOpportAct2+","+citizens.countOpportAct3+","+citizens.countOpportStreet+","
+    +citizens.totalMoneyRobbed+","+citizens.totalMoneyIncome+","+citizens.involvedOpport+","+citizens.curTimeNextRob) 
+    txtWriter.newLine()
+    
+  txtWriter.close()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="changeEmployment" sigReadOnly="false" retType="void" imports="uchicago.src.sim.util.Random" paramNames="">
+<![CDATA[
+def changeEmployment():
+  
+
+  Random.createUniform()
+  unempList =  ArrayList()
+  empList = ArrayList()
+  unempPicked = ArrayList()
+  empPicked = ArrayList()
+  index = 0
+  
+  for citizen as Citizen in self.citizens:
+    index = index + 1
+    if citizen.employed == false:
+      unempList.add(Integer(index))
+    else:
+      empList.add(Integer(index))
+         
+  # while unempPicked.size() < Math.round(self.UNEMP_RATE):
+  while unempPicked.size() < Math.round(unempList.size() * 0.05):
+
+    # Switch employment status of a random subset of 5% of all unemployed citizens from unemployed -> employed
+    rdm = Random.uniform.nextIntFromTo(0, unempList.size()-1);
+    cur = unempList.get(rdm)
+    if unempPicked.contains(cur) == false:
+      unempPicked.add(cur)
+    
+  # while empPicked.size() < Math.round(self.UNEMP_RATE):
+  # the number of unemployed who become employed is unempPicked.size()
+  # now change the exact same number from employed to umemployed to keep the unemployment rate constant.
+  while empPicked.size() < unempPicked.size():
+   
+    # and employed -> unemployed
+    rdm = Random.uniform.nextIntFromTo(0, empList.size()-1);
+    cur = empList.get(rdm)
+    if empPicked.contains(cur) == false:
+      empPicked.add(cur)
+    
+  secondIndex = 0    
+  for citizen as Citizen in self.citizens: 
+    secondIndex = secondIndex + 1
+    
+    for number in unempPicked:
+      if Integer(secondIndex) == (Integer)number:
+        citizen.employed = true
+    
+    for number in empPicked:
+      if Integer(secondIndex) == (Integer)number:
+        citizen.employed = false
+        
+  print "Employment status changed for "+unempPicked.size()+" citizens. "+unempList.size()+" are unemployed and "+empList.size()+" are employed."
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="distributeIncome" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def distributeIncome():
+  print "distribute Income"
+  for citizen as Citizen in self.citizens:
+    
+    if citizen.employed:
+      citizen.wealth = citizen.wealth + citizen.income
+      citizen.totalMoneyIncome = citizen.totalMoneyIncome + citizen.income
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="writeCopsOut" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def writeCopsOut():
+
+  outFileName = ""
+  baseFilePath = "C:/ESRIPress/MaputoSim/Data/output"
+  outFileName = baseFilePath + "/cops_"+self.TIME_SAFE+"safe_"+self.MODELTYPE+"type_"+self.MODE_MULTIPLICATOR+self.MODE+"mode_"+self.UNEMP_RATE+"unemp_"+self.TIMETO_REOFFEND+"reoffend_"+self.PROPENSITY+"propensity_"+self.RngSeed+"RngSeed.csv"
+  
+  print "Writing cops to "+outFileName
+
+  txtWriter = BufferedWriter(FileWriter(outFileName))
+  columnNames = "id, nodesVisited, numberDistinctNodes, crimesPrevented, isHotspotCop"
+  intSize = int(columnNames.length()) 
+  txtWriter.write(columnNames,0,intSize) 
+  txtWriter.newLine()
+
+  i = 0
+  for cop as Cop in self.cops:
+    i = i + 1
+    txtWriter.write(i+","+cop.nodesVisited+","+cop.visited.size()+","+cop.crimesPrevented+","+cop.isHotspotCop)
+    txtWriter.newLine()
+  
+  txtWriter.close()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="resetCitizens" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def resetCitizens():
+  
+  for citizen as Citizen in self.citizens:
+    citizen.position = 0
+    citizen.activityTimer = 0
+    citizen.onPath = false
+    citizen.newAtActivity = true
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="determineRobs" sigReadOnly="false" retType="void" imports="uchicago.src.sim.util.Random java.lang.Math.*" paramNames="">
+<![CDATA[
+def determineRobs():
+  
+  # Loop through the nodes with citizens and get the number of visits 
+  for occupied as ActiveNode in self.activeNodes:
+    
+    # get Place from ActiveNode
+    occupiedObject = Float(occupied.strnode)
+    currentPlace = (Place)self.placeMap.get(occupiedObject)
+    
+    # Initialize variables
+    numAgentsAtNode = occupied.getAgentList().size()
+    potentialOffenders = ArrayList()
+    witnesses = ArrayList()
+    copPresent = false
+    civilGuardians = false
+    commitCrime = true
+    victim = Citizen()
+    maxMoney = 0
+    numberOfWitnesses = 0
+    reoffendOK = false
+    # testing
+    numRobRec1 = 0
+    numRobRec2 = 0
+    numRobPath = 0
+    
+    #if numAgentsAtNode > 1:
+    #  print "At node "+occupied.strnode+" there are "+numAgentsAtNode+" agents at modelStep: "+self.modelStep
+    
+   # if occupied.strnode == 4170:
+   #   if numAgentsAtNode == 1:
+   #     print self.modelStep+ " - At node "+occupied.strnode+" there are "+numAgentsAtNode+" agents. First agent is: "+occupied.getAgentList().get(0).toString()
+   #   elif numAgentsAtNode == 2:
+   #     print self.modelStep+ " - At node "+occupied.strnode+" there are "+numAgentsAtNode+" agents. First agent is: "+occupied.getAgentList().get(0).toString()+ "Second agent is: "+occupied.getAgentList().get(1).toString()
+   #   elif numAgentsAtNode == 3:
+   #     print self.modelStep+ " - At node "+occupied.strnode+" there are "+numAgentsAtNode+" agents. First agent is: "+occupied.getAgentList().get(0).toString()+ "Second agent is: "+occupied.getAgentList().get(1).toString()+ "Third agent is: "+occupied.getAgentList().get(2).toString()   
+   #   else:
+   #     print self.modelStep+ " - At node "+occupied.strnode+" there are "+numAgentsAtNode+" agents."
+    
+    # loop through citizens of current ActiveNode
+    for agentName as String in occupied.getAgentList():
+      
+
+      #Bunch of code that get the agent name (e.g. a1) and then strips off the first character 
+      #and pulls the correct Citizen agent using the agent name  
+      partName = agentName.substring(1) 
+      index = int(partName) - 1 
+      citizen = (Citizen)self.citizens.get(index)
+      
+      #if agentName == "a571":
+       # print self.modelStep+ " - agent named a571 is in occupied agentlist for place id "+occupied.strnode+" is he not safe? " + citizen.notSafe
+      
+      # only citizens that are notSafe can be part of robbery: on street, rec1 and rec1, NOT at home or at work
+      if citizen.notSafe == true:
+        
+        
+        # compute time since last offense and decide if a new is ok
+        # citizen.lastRobbery == 0 is stupid, only generates a ton of opportunities on first day 
+        # if adjustedTimeToReoffend < diff or citizen.lastRobbery == 0:
+          
+        diff = self.modelStep - citizen.lastRobbery
+        if citizen.curTimeNextRob < diff or citizen.lastRobbery == 0:
+          reoffendOK = true
+          #print citizen.name+" is allowed to rob again! lastRob: "+citizen.lastRobbery+", timeToReoffend: "+citizen.timeToReoffend+", at step: "+self.modelStep
+        else: 
+          reoffendOK = false
+          
+        # produce a certain probability to tune the simulation towards realistic numbers, 4910 per year or 13.45 per day
+        # important is to keep the influence of timeSafe
+        Random.createUniform()
+        randomfactor = Random.uniform.nextIntFromTo(1, 10000);
+              
+        if randomfactor < self.TUNEFACTOR and reoffendOK == true:
+          reoffendOK = true
+        else:
+          reoffendOK = false
+          
+        # split all citizens in potential offenders and victims
+        # additionally offenders must have enough time since last rob or 0 = first rob
+        if citizen.criminalPropensity == true and reoffendOK == true:
+          potentialOffenders.add(citizen)
+        else:
+          witnesses.add(citizen)
+
+    # check if both ArrayLists are not empty, there must be at least 1 offender and 1 victim
+    if potentialOffenders.size() > 0 and witnesses.size() > 0:
+      
+      # pick random offender from arraylist 
+      #Random.createUniform()
+      rdm = Random.uniform.nextIntFromTo(0, potentialOffenders.size()-1); 
+        
+      offender = (Citizen)potentialOffenders.get(rdm)
+      #print "We have a new offender: " + offender.name + ", list of offenders size: " + potentialOffenders.size() + " victims: " + witnesses.size()+" at modelStep: "+self.modelStep
+      # TODO Register willing offender?
+      
+      # put other potential offenders into witnesses list and remove from potentialOffenders list
+      potentialOffenders.remove(offender)
+      if potentialOffenders.size() > 0:
+        for formerOffender as Citizen in potentialOffenders:
+          witnesses.add(formerOffender)
+          # throws java.util.ConcurrentModificationException
+          # potentialOffenders.remove(formerOffender)
+          
+      # now pick the victim as the witness with most money
+      for potentialVictim as Citizen in witnesses:
+        if potentialVictim.wealth > maxMoney:
+          victim = potentialVictim
+          maxMoney = potentialVictim.wealth
+          # remove victim from list of witnesses
+          # throws java.util.ConcurrentModificationException
+          # witnesses.remove(victim)
+      
+      # compute victim wealth adjusted by a Uniform probability
+      probability = Random.uniform.nextIntFromTo(-10, 10);
+      adjustedVictimWealth = victim.wealth + probability    
+                  
+      # deprecated weil sonst nach einer Zeit fast keine robs mehr stattfinden, 
+      # weil die offender die reichsten sind und keine Opfer mehr haben
+      #if (adjustedVictimWealth > offender.wealth):
+      #  basicWealthCondition = true
+         
+      if victim.wealth >= 10:
+        
+        # We now have willing offender and viable victim
+        # Register opportunity
+        currentPlace.totOpport = currentPlace.totOpport + 1
+        self.currentDayConvergences = self.currentDayConvergences + 1
+        
+        # Register victim based Convergence count for streets, act1, act2 and act3
+        # print "opportunity currentPlace: "+currentPlace.strcl_+" victim.rec1: "+victim.rec1+"  victim.rec2: "+victim.rec2+" occupiedObject: "+occupiedObject.toString()
+        if victim.currentNode == victim.rec1:
+          victim.countOpportAct1 = victim.countOpportAct1 + 1
+            
+          #if victim.name == "a73":
+          #  print self.modelStep+" - "+offender.name+" robs "+victim.name+" at Act1 currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_
+          
+        elif victim.currentNode == victim.rec2:
+          victim.countOpportAct2 = victim.countOpportAct2 + 1
+            
+          #if victim.name == "a73":
+          #  print self.modelStep+" - "+offender.name+" robs "+victim.name+" at Act2 currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_
+          
+        # if opportunity happens to unemployed citizen at work = act3
+        elif victim.currentNode == victim.work:
+          victim.countOpportAct3 = victim.countOpportAct3 + 1
+            
+         # if victim.name == "a73":
+         #   print self.modelStep+" - "+offender.name+" robs "+victim.name+" at Act 3 currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_
+         #   print self.modelStep+" - agent named "+victim.name+" is robbed at work at place id "+occupied.strnode+" is he not safe? " + victim.notSafe+" is he employed? " + victim.employed
+          
+        elif victim.currentNode == victim.home:
+          #print self.modelStep+ " - agent named "+victim.name+" is robbed at home!!! currentNode: "+victim.currentNode+" and currentPlace.strcl_: "+currentPlace.strcl_+" is he not safe? " + victim.notSafe
+          # kommt nur vor wenn ein agent zufaellig am home node verbeikommt z.b. zwischen work und act 1, ist aber in dem Fall strasse fuer ihn.
+          victim.countOpportStreet = victim.countOpportStreet + 1
+        else:
+          victim.countOpportStreet = victim.countOpportStreet + 1
+        
+        #register convergence for victim
+        victim.involvedOpport = victim.involvedOpport + 1
+        
+        #register convergence for victim
+        offender.involvedOpport = offender.involvedOpport + 1
+        
+        #if offender.name == "a571":
+         # print self.modelStep+ " - offender named a571 is involved in convergence at place id "+occupied.strnode+" is he not safe? " + offender.notSafe
+        
+        # print "Another Convergence at modelStep: "+self.modelStep+" with victimWealth: "+victim.wealth+", adjVictimWealth: "+adjustedVictimWealth+", war > als offender Wealth: "+offender.wealth
+
+        # check if Police is present
+        for cop as Cop in self.cops:
+          copNode = cop.getLocation()
+          # print "cops total: "+self.cops.size()+" copnode: "+copNode.strcl_+", occupied: "+occupied.strnode
+          
+          # Hier ev occupied.strnode plus 1 rechnen?
+          
+          # if cop.name == "c5" and copNode.strcl_ == 3466:
+          # if cop.name == "c5":
+            # print "c5 determineRobs occupied.strnode: "+occupied.strnode+" cop Node: "+copNode.strcl_
+          
+          # occupied.strnode ist normalisiert, copNode.strcl_ auch?
+          if copNode.strcl_ == occupied.strnode:
+            copPresent = true
+            # print "A cop prevented a crime at modelStep = "+self.modelStep
+            # Register Cops prevented a crime
+            cop.crimesPrevented = cop.crimesPrevented + 1
+            currentPlace.copPrev = currentPlace.copPrev + 1
+            currentPlace.totPrevent = currentPlace.totPrevent + 1
+            self.currentDayCopPrevented = self.currentDayCopPrevented + 1
+            # print "Cop Prevented count for current day: "+self.currentDayCopPrevented
+            break
+            
+            # den taeter bestrafen, timeToReoffend auf 1-7 Tage setzen
+            strafeFactor = Random.uniform.nextIntFromTo(1,7);
+            offender.curTimeNextRob = offender.curTimeNextRob + 1440 * strafeFactor
+        
+        # check number of witnesses and get random guardianship factor
+        # guardianship < 1: => not enough witnesses present, commit crime
+        # guardianship = 1: => random decision 50:50
+        # guardianship > 1: => too many witnesses present, no crime
+        numberOfWitnesses = numAgentsAtNode - 2
+        guardianshipFactor = Random.uniform.nextIntFromTo(-3, 3);
+        guardianship = numberOfWitnesses + guardianshipFactor
+        
+        # change boolean commitCrime according to guardianship value
+        random = Random.uniform.nextIntFromTo(0, 1);
+        if guardianship < 1:
+          commitCrime = true
+        elif guardianship == 1 and random == 0:
+          # chance is 50:50
+          commitCrime = true
+        else:
+          # Register Civilians prevented a crime
+          #print "Civilians prevented a crime! modelStep = "+self.modelStep
+          
+          currentPlace.civPrev = currentPlace.civPrev + 1
+          currentPlace.totPrevent = currentPlace.totPrevent + 1
+          self.currentDayCivilianPrevented = self.currentDayCivilianPrevented + 1
+          # print "Civilian Prevented count for current day: "+self.currentDayCivilianPrevented
+          civilGuardians = true
+          commitCrime = false
+          
+        # random Factor to adjust crime rate goal is 4910 pro jahr, 409/m oder 13.45/d
+        #factor = Random.uniform.nextIntFromTo(1, 1000);   
+        #if factor > 184:
+        #  commitCrime = false
+        #  offender.lastRobbery = self.modelStep
+        
+        # robbery takes place when all requirements are met:
+        # no cops present: copPresent = false
+        # no civilian guardians (adjusted by random value): civilGuardians = false
+        # 1 offender and 1 victim
+        # victim has more (adjusted by random value) money than offender (modeltype 1 and 2)
+        if commitCrime == true and copPresent == false:
+          # ** ROBBERY HAPPENS **
+          # print "V wealth" +victim.wealth
+          # determine amount of money robbed = random number between 1 and 39, 
+          # or less if victim does not have more money
+          # 39 is average monthly income
+          maximum = Math.min(self.AMOUNT_ROBBED,victim.wealth)
+          moneyRobbed = Random.uniform.nextIntFromTo(1, maximum);
+          
+          # print offender.name+" robs "+victim.name+" and takes "+moneyRobbed+" at modelStep: "+self.modelStep
+          
+          #if victim.name == "a73":
+          #  print self.modelStep+" - a73 is robbed at currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_
+          
+          #adjust offender fields
+          offender.wealth = offender.wealth + moneyRobbed
+          offender.timesRobOther = offender.timesRobOther + 1
+          offender.lastRobbery = self.modelStep
+                   
+          #increase field totalMoneyRobbed for output
+          offender.totalMoneyRobbed = offender.totalMoneyRobbed + moneyRobbed
+          
+          # adjust victim fields
+          victim.wealth = victim.wealth - moneyRobbed
+          victim.timesGotRobbed = victim.timesGotRobbed + 1
+          
+          # Register totalRob
+          currentPlace.totalRob = currentPlace.totalRob + 1
+          
+          # Register victim based Rob count for streets, rec1 and rec2
+          # print "Rob currentPlace: "+currentPlace.strcl_+" victim.rec1: "+victim.rec1+"  victim.rec2: "+victim.rec2+" occupiedObject: "+occupiedObject.toString()
+          if victim.currentNode == victim.rec1:
+            victim.countRobRec1 = victim.countRobRec1 + 1
+            
+            #if victim.name == "a73":
+            #  print self.modelStep+" - "+offender.name+" robs "+victim.name+" at Act1 currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_
+          
+          elif victim.currentNode == victim.rec2:
+            victim.countRobRec2 = victim.countRobRec2 + 1
+            
+            #if victim.name == "a73":
+            #  print self.modelStep+" - "+offender.name+" robs "+victim.name+" at Act2 currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_
+          
+          # if robbery happens to unemployed citizen at work = rec3
+          elif victim.currentNode == victim.work:
+            victim.countRobRec3 = victim.countRobRec3 + 1
+            
+           # if victim.name == "a73":
+           #   print self.modelStep+" - "+offender.name+" robs "+victim.name+" at Act 3 currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_
+           #   print self.modelStep+" - agent named "+victim.name+" is robbed at work at place id "+occupied.strnode+" is he not safe? " + victim.notSafe+" is he employed? " + victim.employed
+          
+          elif victim.currentNode == victim.home:
+            #print self.modelStep+ " - agent named "+victim.name+" is robbed at home!!! currentNode: "+victim.currentNode+" and currentPlace.strcl_: "+currentPlace.strcl_+" is he not safe? " + victim.notSafe
+            # kommt nur vor wenn ein agent zufaellig am home node verbeikommt z.b. zwischen work und act 1, ist aber in dem Fall strasse fuer ihn.
+            victim.countRobStreet = victim.countRobStreet + 1
+          else:
+            victim.countRobStreet = victim.countRobStreet + 1
+            
+          #if victim.name == "a73":
+          #  print self.modelStep+" - "+offender.name+" robs "+victim.name+" on Street. currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_+" and takes "+moneyRobbed
+          
+          #if offender.name == "a73":
+          #  print self.modelStep+" - "+offender.name+" robs "+victim.name+" on Street. currentNode: "+victim.currentNode+" at currentPlace.strcl_: "+currentPlace.strcl_+" and takes "+moneyRobbed
+          
+          # update Report Variables
+          self.currentDayRobberies = self.currentDayRobberies + 1
+          # print "Robbery count for current day: "+self.currentDayRobberies
+          self.robberiesCount = self.robberiesCount + 1
+          
+          # calculate time of Day
+          tickOfDay = self.modelStep % 1440 # get remainder of the day
+          
+          # calculate location for offender. 
+          # possible results are: home, pathHomeWork, work, pathWorkAct1, act1, pathAct1Act2, act2, pathAfterAct2
+          locationOffender = ""
+          
+          if offender.position == 0:
+            # sollte nicht vorkommen!
+            locationOffender = "home"
+          elif offender.position > 0 and offender.position < offender.positionWork:
+            locationOffender = "pathHomeWork"
+          elif offender.position == offender.positionWork:
+            locationOffender = "work"
+          elif offender.position > offender.positionWork and offender.position < offender.positionRec1:
+            locationOffender = "pathWorkAct1"
+          elif offender.position == offender.positionRec1:
+            locationOffender = "act1"
+          elif offender.position > offender.positionRec1 and offender.position < offender.positionRec2:
+            locationOffender = "pathAct1Act2"
+          elif offender.position == offender.positionRec2:
+            locationOffender = "act2"
+          elif offender.position > offender.positionRec2:
+            locationOffender = "pathAfterAct2"
+          else:
+             print "Fehler bei der Ermittlung der Position des Taeters!"
+            
+          # calculate location for victim. 
+          # possible results are: home, pathHomeWork, work, pathWorkAct1, act1, pathAct1Act2, act2, pathAfterAct2
+          locationVictim = ""
+          
+          if victim.position == 0:
+            # sollte nicht vorkommen!
+            locationVictim = "home"
+          elif victim.position > 0 and victim.position < victim.positionWork:
+            locationVictim = "pathHomeWork"
+          elif victim.position == victim.positionWork:
+            locationVictim = "work"
+          elif victim.position > victim.positionWork and victim.position < victim.positionRec1:
+            locationVictim = "pathWorkAct1"
+          elif victim.position == victim.positionRec1:
+            locationVictim = "act1"
+          elif victim.position > victim.positionRec1 and victim.position < victim.positionRec2:
+            locationVictim = "pathAct1Act2"
+          elif victim.position == victim.positionRec2:
+            locationVictim = "act2"
+          elif victim.position > victim.positionRec2:
+            locationVictim = "pathAfterAct2"
+          else:
+            print "Fehler bei der Ermittlung der Position des Victims!"
+          
+          # Create new Robbery Object
+          newRobbery = Robbery()
+          #newRobbery.setModel(self)
+          newRobbery.number = self.robberiesCount
+          newRobbery.timeOfDay = tickOfDay
+          newRobbery.locationOffender = locationOffender
+          newRobbery.locationVictim = locationVictim
+          newRobbery.amountRobbed = moneyRobbed
+          newRobbery.location = victim.currentNode
+          newRobbery.nameVictim = victim.name
+          newRobbery.nameOffender = offender.name
+          self.robberies.add(newRobbery)
+          
+        # compute new timeToReOffend by a Uniform probability (1 bis 7 Tage bis zum naechsten raub)
+        # thist must happen after every opportunity, not only after a robbery
+        # TODO zum testen:
+        # reoffendProbability = Random.uniform.nextIntFromTo(1, 7) 
+        # offender.curTimeNextRob = offender.timeToReoffend * reoffendProbability
+
+      else:
+
+        self.currentDayNoRobCozWealth = self.currentDayNoRobCozWealth + 1
+        # print "Victim named "+victim.name+" is too poor, no crime! at modelStep: "+self.modelStep+" with currentDayNoRobCozWealth"+self.currentDayNoRobCozWealth+ ", victimWealth: "+victim.wealth+", adjVictimWealth: "+adjustedVictimWealth+", war < als offender named "+offender.name+" Wealth: "+offender.wealth
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="initCopRoutes" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def initCopRoutes():
+  print "Init Cop Routes "
+  
+  # fill ArrayList with IDs of Hotspots
+  # TODO neue hotspots denormalisieren!
+  self.hotspots = ArrayList()
+  self.hotspots.add("5722") #alle nodes sind denormalisiert wie in der nodes_ftl
+  self.hotspots.add("3419")
+  self.hotspots.add("6912")
+  self.hotspots.add("5692")
+  self.hotspots.add("1956")
+  self.hotspots.add("2440")
+  self.hotspots.add("6020")
+  self.hotspots.add("6553")
+  self.hotspots.add("3179")
+  self.hotspots.add("6451")
+ 
+  self.positionHotspots = LinkedHashMap()
+  
+  # Each cop agent has a list of path nodes they travel to get to 
+  # their 10 hotspot nodes (one file for each agent):
+  for i in range (self.COPS): # only 100 of 200 cops have a definde path. other 100 move randomly
+  
+    # nodes in this file must be normalized
+    # TODO neue file denormalisieren!
+    shpFilePath = "C:/ESRIPress/MaputoSim/Data/copPath/XYhotspotsfinal_FD046_2.dbf"
+   
+    # Create reader and get first field
+    reader = DBFReader(shpFilePath)
+    fieldCount = reader.getFieldCount()
+   
+    # Declaring the list here creates a new one for each file read.  
+    thePathNodeList = ArrayList()
+    while (reader.hasNextRecord()):       		# while reads until there are no more records
+      theObject = reader.nextRecord()     			
+      objList = Arrays.asList(theObject)
+      #print "Field value ", objList.get(0).toString()
+      theStrCurrentNode = objList.get(27).toString()
+      intCurrentNode = Integer.valueOf(theStrCurrentNode).intValue()
+      if intCurrentNode != 0:
+        thePathNodeList.add(objList.get(27)) # Spalte AB = 27
+        
+        if self.hotspots.contains(theStrCurrentNode):
+          self.hotspots.remove(theStrCurrentNode)
+          # one of the path nodes is a hotspot
+          # fill hashmap with parameters (position, hotspotID)
+          nodeListSize = thePathNodeList.size()-1
+          strNodeListSize = String.valueOf(nodeListSize)
+          # hashmap (string, string)
+          self.positionHotspots.put(theStrCurrentNode,strNodeListSize)
+                
+    # Create an individual cop agent called copSet within the loop to read the files in the directory 
+    copSet = Cop()
+    copSet.setModel(self)
+    copSet.setName("c"+i)
+  
+    # Assign the values from the file to the agent variables 
+    # pathNodes sind normalisiert
+    copSet.pathNodes = thePathNodeList
+    # print "copSet.pathNodes: "+copSet.pathNodes.size()
+    # Add an agent to the ActivityNode class with the field values from above
+    self.cops.add(copSet)
+    
+  self.hotspots = ArrayList()
+  self.hotspots.add("5722") #alle nodes sind denormalisiert wie in der nodes_ftl
+  self.hotspots.add("3419")
+  self.hotspots.add("6912")
+  self.hotspots.add("5692")
+  self.hotspots.add("1956")
+  self.hotspots.add("2440")
+  self.hotspots.add("6020")
+  self.hotspots.add("6553")
+  self.hotspots.add("3179")
+  self.hotspots.add("6451")
+  print "init cop Routes finished"
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="writeDailyReport" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def writeDailyReport():
+  
+  outFileName = ""
+  baseFilePath = "C:/ESRIPress/MaputoSim/Data/output"
+  outFileName = baseFilePath + "/dailyReport_"+self.TIME_SAFE+"safe_"+self.MODELTYPE+"type_"+self.MODE_MULTIPLICATOR+self.MODE+"mode_"+self.UNEMP_RATE+"unemp_"+self.TIMETO_REOFFEND+"reoffend_"+self.PROPENSITY+"propensity_"+self.RngSeed+"RngSeed.csv"
+  
+  print "Writing daily Report to "+outFileName
+  
+  txtWriter = BufferedWriter(FileWriter(outFileName))
+  
+  columnNames = "Day,Robberies,Convergences,CopPrevented,CivilianPrevented,DailyNoRobCozWealth" 
+  intSize = int(columnNames.length()) 
+  txtWriter.write(columnNames,0,intSize) 
+  txtWriter.newLine()
+
+  #Laufzeit der Simulation in Tagen berechnen
+  runtimeInDays = 0
+  if self.MODE == "D":
+    runtimeInDays = self.MODEL_DAY * self.MODE_MULTIPLICATOR /1440
+  elif self.MODE == "M":
+    runtimeInDays = self.MODEL_MONTH * self.MODE_MULTIPLICATOR /1440
+  elif self.MODE == "Y":
+    runtimeInDays = self.MODEL_YEAR * self.MODE_MULTIPLICATOR /1440
+  else:
+     print "error!"
+       
+  i=0
+  for day in range(runtimeInDays):
+    i=i+1
+    txtWriter.write(i+","+String.valueOf(self.dailyRobberies.get(day))+","+String.valueOf(self.dailyConvergences.get(day))+","
+    +String.valueOf(self.dailyCopPrevented.get(day))+","+String.valueOf(self.dailyCivilianPrevented.get(day))+","+String.valueOf(self.dailyNoRobCozWealth.get(day)))
+    txtWriter.newLine()
+    
+  print "Output finished with " + runtimeInDays + " days!"
+  txtWriter.close()
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="resetDailyReportValues" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def resetDailyReportValues():
+  
+  self.dailyRobberies.add(String.valueOf(self.currentDayRobberies))
+  self.dailyConvergences.add(String.valueOf(self.currentDayConvergences))
+  self.dailyCopPrevented.add(String.valueOf(self.currentDayCopPrevented)) 
+  self.dailyCivilianPrevented.add(String.valueOf(self.currentDayCivilianPrevented)) 
+  self.dailyNoRobCozWealth.add(String.valueOf(self.currentDayNoRobCozWealth)) 
+  
+  currentDay = self.modelStep/1440
+  
+  print "Summary for day "+currentDay+": "+String.valueOf(self.currentDayRobberies)+" robberies, "+String.valueOf(self.currentDayConvergences)+" convergences, "+String.valueOf(self.currentDayCopPrevented)+" prevented by Cops and "+String.valueOf(self.currentDayCivilianPrevented)+" prevented by Civilians."
+  #print "self.currentDayNoRobCozWealth: "+self.currentDayNoRobCozWealth
+  
+  self.currentDayRobberies = 0
+  self.currentDayConvergences = 0
+  self.currentDayCopPrevented = 0
+  self.currentDayCivilianPrevented = 0
+  self.currentDayNoRobCozWealth = 0
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="writeRobberiesOut" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def writeRobberiesOut():
+
+  outFileName = ""
+  baseFilePath = "C:/ESRIPress/MaputoSim/Data/output"
+  outFileName = baseFilePath + "/robberies_"+self.TIME_SAFE+"safe_"+self.MODELTYPE+"type_"+self.MODE_MULTIPLICATOR+self.MODE+"mode_"+self.UNEMP_RATE+"unemp_"+self.TIMETO_REOFFEND+"reoffend_"+self.PROPENSITY+"propensity_"+self.RngSeed+"RngSeed.csv"
+  
+  print "Writing robberies to "+outFileName
+
+  txtWriter = BufferedWriter(FileWriter(outFileName))
+  columnNames = "id, timeOfDay, nameOffender, locationOffender, nameVictim, locationVictim, amountRobbed, location"
+  intSize = int(columnNames.length()) 
+  txtWriter.write(columnNames,0,intSize) 
+  txtWriter.newLine()
+
+  for rob as Robbery in self.robberies:
+    txtWriter.write(rob.number+","+rob.timeOfDay+","+rob.nameOffender+","+rob.locationOffender+","+rob.nameVictim+","+rob.locationVictim+","+rob.amountRobbed+","+rob.location)
+    txtWriter.newLine()
+  
+  txtWriter.close()
+]]>
+</RePastEvolver:action>
+
+
+<RePastEvolver:parameter name="placeMap" type="java.util.HashMap" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="modelStep" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="MODEL_DAY" type="int" defaultValue="1440" probe="false" accessible="true" />
+<RePastEvolver:parameter name="NUM_PLACES" type="int" defaultValue="7001" probe="true" accessible="true" />
+<RePastEvolver:parameter name="COPS" type="int" defaultValue="200" probe="true" accessible="true" />
+<RePastEvolver:parameter name="AGENTS" type="int" defaultValue="1000" probe="true" accessible="true" />
+<RePastEvolver:parameter name="NORM_TRAVEL" type="cern.jet.random.Normal" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="CITIZENS" type="int" defaultValue="1000" probe="true" accessible="true" />
+<RePastEvolver:parameter name="MODEL_HOUR" type="int" defaultValue="60" probe="false" accessible="true" />
+<RePastEvolver:parameter name="MODEL_MONTH" type="int" defaultValue="43200" probe="false" accessible="true" />
+<RePastEvolver:parameter name="MODEL_YEAR" type="int" defaultValue="525600" probe="false" accessible="true" />
+<RePastEvolver:parameter name="TIME_SAFE" type="double" defaultValue="74.75" probe="true" accessible="true" />
+<RePastEvolver:parameter name="TIME_WORK" type="int" defaultValue="420" probe="true" accessible="true" />
+<RePastEvolver:parameter name="TIMETO_REOFFEND" type="int" defaultValue="120" probe="true" accessible="true" />
+<RePastEvolver:parameter name="NORM_WEALTH" type="int" defaultValue="475" probe="true" accessible="true" />
+<RePastEvolver:parameter name="UNEMP_RATE" type="double" defaultValue="24.5" probe="true" accessible="true" />
+<RePastEvolver:parameter name="NORM_INCOME" type="double" defaultValue="19.5" probe="true" accessible="true" />
+<RePastEvolver:parameter name="PROPENSITY" type="int" defaultValue="10" probe="true" accessible="true" />
+<RePastEvolver:parameter name="MODE" type="java.lang.String" defaultValue="&quot;D&quot;" probe="true" accessible="true" />
+<RePastEvolver:parameter name="MODELTYPE" type="int" defaultValue="0" probe="true" accessible="true" />
+<RePastEvolver:parameter name="positionHotspots" type="java.util.HashMap" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="hotspots" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="HOTSPOTTIMER" type="int" defaultValue="10" probe="true" accessible="true" />
+<RePastEvolver:parameter name="MODE_MULTIPLICATOR" type="int" defaultValue="1" probe="true" accessible="true" />
+<RePastEvolver:parameter name="dailyRobberies" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="dailyConvergences" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="dailyCopPrevented" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="currentDayRobberies" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="currentDayConvergences" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="currentDayCopPrevented" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="dailyCivilianPrevented" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="currentDayCivilianPrevented" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="currentDayNoRobCozWealth" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="dailyNoRobCozWealth" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="AMOUNT_ROBBED" type="int" defaultValue="4" probe="true" accessible="true" />
+<RePastEvolver:parameter name="robberiesCount" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="TUNEFACTOR" type="int" defaultValue="41" probe="true" accessible="true" />
+
+
+<RePastEvolver:schedule order="0 1 3 2" />
+<RePastEvolver:schedule order="8" />
+<RePastEvolver:schedule order="5" /><RePastEvolver:schedule order="4 6 9" />
+<RePastEvolver:schedule order="7" />
+<RePastEvolver:schedule_item action="incrementModel" tick="1.0" type="1" last="false" target="AdvancedVectorMovement" id="3"/>
+<RePastEvolver:schedule_item action="updateDisplay" tick="1440.0" type="2" last="true" target="AdvancedVectorMovement" id="4"/>
+<RePastEvolver:schedule_item action="writeAgents" tick="1440.0" type="2" last="false" target="AdvancedVectorMovement" id="5"/>
+<RePastEvolver:schedule_item action="resetCitizens" tick="1440.0" type="2" last="true" target="AdvancedVectorMovement" id="6"/>
+<RePastEvolver:schedule_item action="changeEmployment" tick="43200.0" type="2" last="false" target="AdvancedVectorMovement" id="7"/>
+<RePastEvolver:schedule_item action="distributeIncome" tick="21600.0" type="2" last="false" target="AdvancedVectorMovement" id="8"/>
+<RePastEvolver:schedule_item action="resetDailyReportValues" tick="1440.0" type="2" last="true" target="AdvancedVectorMovement" id="9"/>
+
+<RePastEvolver:EvolverBean type="Compileable" class="class uchicago.src.simbuilder.beans.gis.VectorAgentProducer" name="Place" groupName="places">
+<VectorDataSource shapefile="C:\ESRIPress\MaputoSim\Data\nodes_ftl.shp" displayField="Comp_Dup" gisPackage="ArcGIS">
+<VectorDataSourceDisplayValue field="default value" color="-65536" isDefault="true" thickness="1" />
+</VectorDataSource>
+
+  <RePastEvolver:action name="step" sigReadOnly="true" retType="void" imports="" paramNames="">
+<![CDATA[
+def step():
+]]>
+</RePastEvolver:action>
+
+
+<RePastEvolver:parameter name="STRCL_" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="myNeighbors" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+
+
+</RePastEvolver:EvolverBean>
+
+<RePastEvolver:EvolverBean type="Compileable" class="class uchicago.src.simbuilder.beans.gis.GenericAgentProducer" name="Citizen" superClass="(None)" groupName="citizens">
+  <RePastEvolver:action name="step" sigReadOnly="true" retType="void" imports="java.lang.Object java.lang.Double java.lang.Number java.lang.Integer uchicago.src.sim.util.Random" paramNames="">
+<![CDATA[
+def step():
+  # Set variables needed for the actions
+  target = 0
+  randMoveSize = Random.uniform.nextIntFromTo(1, 1)
+  
+  # increase timer for uneployment
+  if self.employed == false:
+    self.cumTimeUnemp = self.cumTimeUnemp + 1
+
+  # if the agent is not at the end of its path (=home activity node)
+  if self.position < self.pathNodes.size()-1:
+    
+    # set current node
+    theStrCurrentNode = self.pathNodes.get(self.position).toString()
+    self.currentNode = Integer.valueOf(theStrCurrentNode).intValue()
+    
+    #if self.name == "a111":
+    #  print self.model.modelStep+" - Agent a571 is in step() with position: "+self.position+ " and currentNode: "+self.currentNode +" and status notSafe: "+self.notSafe
+    
+    # Test to see if this is the first ActiveNode
+    #nodeisEqual = false
+    #if self.model.activeNodes.size() <> 0:
+    #  for occupied as ActiveNode in self.model.activeNodes:
+    #    
+        # falsch da strnode nicht der aktuelle ist
+        # if self.strnode == occupied.strnode:
+    #    if self.currentNode == occupied.strnode:
+    #      occupied.agentList.add(self.name)
+    #      nodeisEqual = true 
+          
+
+    
+    # create new Active Node if there is none present on that place
+    #if self.model.activeNodes.size() == 0 or nodeisEqual == false:
+    #  newAgent = ActiveNode()
+    #  newAgent.setModel(self.model)
+    #  newAgent.strnode = self.currentNode
+    #  newAgent.agentList = ArrayList()
+    #  newAgent.agentList.add(self.name)
+    #  self.model.activeNodes.add(newAgent)
+      #if self.name == "a571":
+      #  if self.currentNode == 4170:
+      #      print self.model.modelStep+" - Agent a571 is added NEW activenode agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "strNode: "+self.strnode
+      #  if self.currentNode == 4170:
+      #      print self.model.modelStep+" - Agent a571 is added NEW activenode agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "strNode: "+self.strnode
+            
+    # On path or at activity node?
+    if self.onPath == false:
+    
+      # Citizen is at an activity node!
+      # First time at node?
+      if self.newAtActivity == true:
+
+        self.newAtActivity = false
+        self.onPath = false
+        self.lastActNode = self.currentNode
+        
+        # which space?
+        # Set timers according to space 
+        # Timer for Home
+        if self.currentNode == self.home:
+          # minus 1 weil er sonst zu lange bleiben wuerde
+          self.activityTimer = self.timeHome - 1
+          self.cumTimeHome = self.cumTimeHome + 1
+          self.notSafe = false
+          #self.notSafe = true
+                 
+          # aus der String ID das Place Objekt holen:  
+          strNode = String.valueOf(self.currentNode).toString()             
+          nodeFL = Float.valueOf(strNode)
+          self.location = (Place)self.model.placeMap.get(nodeFL)   
+          self.location.citiStart = self.location.citiStart + 1              
+          
+          #if self.name == "a1":
+          #  print self.model.modelStep+" - Agent a1 is at home: "+self.currentNode+" with status notSafe: "+self.notSafe+" at route position: "+self.position
+                                
+        # Timer for Work
+        elif self.currentNode == self.work:         
+          self.activityTimer = self.timeWork - 1 # means Rec 3 for unemployed
+          if self.employed == true:
+            self.cumTimeWork = self.cumTimeWork + 1
+          else:
+            self.cumTimeRec3 = self.cumTimeRec3 + 1
+            self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+          self.notSafe = false
+          #self.notSafe = true
+          
+          # letzter Schritt zum place wird noch registriert
+          self.timePathHomeWork = self.timePathHomeWork + 1
+          self.cumTimeTraveling = self.cumTimeTraveling + 1
+          self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+          
+          #if self.name == "a1":
+          #  print self.model.modelStep+" - Agent a1 is at work: "+self.currentNode+" with status notSafe: "+self.notSafe+" at route position: "+self.position        
+            
+        # Timer for Rec 1
+        elif self.currentNode == self.rec1:
+          
+          #if self.name == "a1":
+          #  print self.model.modelStep+" - Agent a1 is at act1: "+self.currentNode+" with status notSafe: "+self.notSafe+" at route position: "+self.position
+            
+          self.cumTimeRec1 = self.cumTimeRec1 + 1
+          self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+          remainder = self.model.modelStep % 1440 # get remainder of the day
+          factor = Random.uniform.nextIntFromTo(1, 9);
+          floatfactor = float(factor)/10
+          floattime = (1440 - remainder) * floatfactor
+          self.timeRec1 = int(floattime)
+          self.activityTimer = self.timeRec1 - 1
+          self.notSafe = true
+          
+          # letzter Schritt zum place wird noch registriert
+          self.timePathWorkAct1 = self.timePathWorkAct1 + 1
+          self.cumTimeTraveling = self.cumTimeTraveling + 1
+          self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+          
+          # TODO entfernen
+          #self.notSafe = false
+      
+        # Timer for Rec 2
+        elif self.currentNode == self.rec2:
+          
+          #if self.name == "a1":
+          #  print self.model.modelStep+ " - Agent a1 is at act2: "+self.currentNode+" with status notSafe: "+self.notSafe+" at route position: "+self.position
+            
+          self.cumTimeRec2 = self.cumTimeRec2 + 1
+          self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+          remainder = self.model.modelStep % 1440 # get remainder of the day
+          self.timeRec2 = 1440 - remainder 
+          self.activityTimer = self.timeRec2 - 1
+          self.notSafe = true
+          
+          # letzter Schritt zum place wird noch registriert
+          self.timePathAct1Act2 = self.timePathAct1Act2 + 1
+          self.cumTimeTraveling = self.cumTimeTraveling + 1
+          self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+          
+          # TODO entfernen
+          #self.notSafe = false
+      
+      # Not first time at node
+      else:
+        if self.activityTimer > 0:
+          # stay here and reduce activity timer
+          self.activityTimer = self.activityTimer - 1
+          
+          #if self.name == "a1":
+          #  print self.model.modelStep+ " - Activity Timer is now: "+self.activityTimer+", Agent a1 is on node: "+self.currentNode+" at route position: "+self.position+" with status notSafe: "+self.notSafe
+          
+          # increase all counters for cumulative time spent
+          if self.currentNode == self.home:
+            self.cumTimeHome = self.cumTimeHome + 1
+            self.onPath = false
+            self.notSafe = false
+            #self.notSafe = true
+            
+          elif self.currentNode == self.work: # former if
+            if self.employed == true:
+              self.cumTimeWork = self.cumTimeWork + 1
+              self.onPath = false
+              self.notSafe = false
+              # employed sind sicher auf work node
+              #self.notSafe = true
+            else:
+              # unemployed!
+              # this means rec 3 here!!!
+              #self.cumTimeWork = self.cumTimeWork + 1 
+
+              self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+              self.cumTimeRec3 = self.cumTimeRec3 + 1
+              self.onPath = false
+              #self.notSafe = false
+              # unemployed sind nicht sicher auf act 3
+              self.notSafe = true
+              
+          # increase self.cumTimeNotSafe for rec1, rec2
+          elif self.currentNode == self.rec1:
+            self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+            self.cumTimeRec1 = self.cumTimeRec1 + 1
+            self.onPath = false
+            self.notSafe = true
+            # TODO entfernen
+            #self.notSafe = false
+            
+          elif self.currentNode == self.rec2:
+            self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+            self.cumTimeRec2 = self.cumTimeRec2 + 1
+            self.onPath = false
+            self.notSafe = true
+            # TODO entfernen
+            #self.notSafe = false
+            
+          #elif self.currentNode == self.rec2 and self.employed == false:
+          #  self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+
+        else:  
+        
+          #if self.name == "a1":
+          #  print self.model.modelStep+ " - Activity Timer = 0, Agent a1 is on street: "+self.currentNode+" at route position: "+self.position+" with status notSafe: "+self.notSafe
+          # move on
+          self.onPath = true
+          self.newAtActivity = true
+          self.notSafe = true
+
+    if self.onPath == true:
+      
+      # move along the path
+      # Check to make sure the random number is positive and nonzero
+      while randMoveSize <= 0:
+        randMoveSize = Random.uniform.nextIntFromTo(1, 6)
+   
+      # Increase Timers:  
+      #self.cumTimeTraveling = self.cumTimeTraveling + 1
+      #self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+      
+      # Assign nonzero number of nodes to move  
+      target = self.position + randMoveSize   # move agent the number of randomly generated positions
+      
+      
+      # Move the agent to a new node  
+      if target >= self.pathNodes.size()-1:
+
+        self.currentNode = self.home
+        self.position = 0
+        self.onPath = false
+        self.notSafe = false
+        #self.notSafe = true
+        
+        #if self.name == "a1":
+        #  print self.model.modelStep+ " - Agent a1 reaches home: "+self.currentNode+" at route position: "+self.position+" with status notSafe: "+self.notSafe+" (position Work: "+self.positionWork+" position Act1: "+self.positionRec1+" position Act2: "+self.positionRec2+")"
+      
+      # citizen reaches (or exceeds) work activity node  
+      elif target >= self.positionWork and target < self.positionRec1 and self.lastActNode == self.home:        
+        # saves last act node to notice when citizen reaches next act node first time
+        self.currentNode = self.work
+        self.position = self.positionWork
+        self.onPath = false
+        if self.employed == true:
+          self.notSafe = false
+        else:
+          self.notSafe = true
+          
+        #if self.name == "a1":
+        #  print self.model.modelStep+ " - Agent a1 reaches work: "+self.currentNode+" at route position: "+self.position+" with status notSafe: "+self.notSafe+" (position Work: "+self.positionWork+" position Act1: "+self.positionRec1+" position Act2: "+self.positionRec2+")"
+        
+      elif target >= self.positionRec1 and target < self.positionRec2 and self.lastActNode == self.work:
+        self.currentNode = self.rec1
+        self.position = self.positionRec1
+        self.onPath = false
+        self.notSafe = true
+        # TODO entfernen
+        #self.notSafe = false
+        
+        #if self.name == "a1":
+        #  print self.model.modelStep+ " - Agent a1 reaches Act1: "+self.currentNode+" at route position: "+self.position+" with status notSafe: "+self.notSafe+" (position Work: "+self.positionWork+" position Act1: "+self.positionRec1+" position Act2: "+self.positionRec2+")"
+        
+      elif target >= self.positionRec2 and target < self.pathNodes.size()-1 and self.lastActNode == self.rec1:
+        self.currentNode = self.rec2
+        self.position = self.positionRec2
+        self.onPath = false
+        self.notSafe = true
+        # TODO entfernen
+        #self.notSafe = false
+        
+        #if self.name == "a1":
+        #  print self.model.modelStep+ " - Agent a1 reaches Act2: "+self.currentNode+" at route position: "+self.position+" with status notSafe: "+self.notSafe+" (position Work: "+self.positionWork+" position Act1: "+self.positionRec1+" position Act2: "+self.positionRec2+")"
+        
+      else:
+        # not yet reached next activity node
+        self.position = target
+        i = target
+        # bleibt nicht normalisiert
+        theStrTestNode = self.pathNodes.get(i).toString()
+        self.currentNode = Integer.valueOf(theStrTestNode).intValue()
+        self.notSafe = true
+        #if self.name == "a1":
+        #  print self.model.modelStep+ " - Agent a1 is on street: "+self.currentNode+" at route position: "+self.position+" with status notSafe: "+self.notSafe+" (position Work: "+self.positionWork+" position Act1: "+self.positionRec1+" position Act2: "+self.positionRec2+")"
+   
+    # register exact position on street
+    # possible results are: home, pathHomeWork, work, pathWorkAct1, act1, pathAct1Act2, act2, pathAfterAct2      
+    if self.position == 0:
+      # do nothing
+      a = 1
+    elif self.position > 0 and self.position < self.positionWork:
+      self.timePathHomeWork = self.timePathHomeWork + 1
+      self.cumTimeTraveling = self.cumTimeTraveling + 1
+      self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+    elif self.position == self.positionWork:
+      a = 2
+    elif self.position > self.positionWork and self.position < self.positionRec1:
+      self.timePathWorkAct1 = self.timePathWorkAct1 + 1
+      self.cumTimeTraveling = self.cumTimeTraveling + 1
+      self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+    elif self.position == self.positionRec1:
+      a = 3
+    elif self.position > self.positionRec1 and self.position < self.positionRec2:
+      self.timePathAct1Act2 = self.timePathAct1Act2 + 1
+      self.cumTimeTraveling = self.cumTimeTraveling + 1
+      self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+    elif self.position == self.positionRec2:
+      a = 4
+    elif self.position > self.positionRec2:
+      self.timePathAct2Home = self.timePathAct2Home + 1
+      self.cumTimeTraveling = self.cumTimeTraveling + 1
+      self.cumTimeNotSafe = self.cumTimeNotSafe + 1
+    else:
+      print "Fehler bei der Registrierung der Street Position des Citizen! position: "+self.position
+    
+    #auf dieser ebene die activenodes befuellen - erst nach der Bewegung
+    
+    # set current node, bleibt nicht normalisiert
+    theStrCurrentNode = self.pathNodes.get(self.position).toString()
+    self.currentNode = Integer.valueOf(theStrCurrentNode).intValue()
+    
+    # Test to see if this is the first ActiveNode
+    nodeisEqual = false
+    
+    #if self.name == "a73":
+    #  print self.model.modelStep+" - PRE ADD ACTIVENODE self.currentNode: "+self.currentNode+", size(): "+self.model.activeNodes.size()
+      
+    if self.model.activeNodes.size() <> 0:
+      for occupied as ActiveNode in self.model.activeNodes:
+        
+        #if occupied.strnode == 1768:        
+          #if self.name == "a73": 
+        #  print self.model.modelStep+" - "+self.name+", auf self.currentNode: "+self.currentNode+", occupied.strnode: "+occupied.strnode+"  size(): "+occupied.agentList.size()
+   
+        #if occupied.strnode == 6528:
+        #  if occupied.agentList.size() == 1:
+        #    print self.model.modelStep+" - Node "+occupied.strnode+" hat 1 Agent: "+occupied.agentList.get(0).toString()
+        #  if occupied.agentList.size() == 2:
+        #    print self.model.modelStep+" - Node "+occupied.strnode+" hat 2 Agents: "+occupied.agentList.get(0).toString()+", "+occupied.agentList.get(1).toString()
+        #  if occupied.agentList.size() == 3:
+        #    print self.model.modelStep+" - Node "+occupied.strnode+" hat 3 Agents: "+occupied.agentList.get(0).toString()+", "+occupied.agentList.get(1).toString()+", "+occupied.agentList.get(2).toString()
+        #  if occupied.agentList.size() > 3:
+        #    print self.model.modelStep+" - Node "+occupied.strnode+" hat "+occupied.agentList.size()+" Agents."
+           
+        
+        # falsch da strnode nicht der aktuelle ist
+        # if self.strnode == occupied.strnode:
+        if self.currentNode == occupied.strnode:       
+      
+          occupied.agentList.add(self.name)
+          nodeisEqual = true 
+          
+      #if self.name == "a73":
+      #  if self.currentNode == 2328:
+      #      print self.model.modelStep+" - Agent a73 is added existing activenode HOME agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode+" size(): "+self.model.activeNodes.size()
+      #  if self.currentNode == 4676:
+      #      print self.model.modelStep+" - Agent a73 is added existing activenode WORK or ACT3 agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode+" size(): "+self.model.activeNodes.size()
+      #  if self.currentNode == 1768:
+      #      print self.model.modelStep+" - Agent a73 is added existing activenode ACT1 agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode+" size(): "+self.model.activeNodes.size()
+      #  if self.currentNode == 5296:
+      #      print self.model.modelStep+" - Agent a73 is added existing activenode ACT2 agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode+ " size(): "+self.model.activeNodes.size()
+    
+    # create new Active Node if there is none present on that place
+    if self.model.activeNodes.size() == 0 or nodeisEqual == false:
+      #if self.name == "a73":
+      #  print "Warum muss ein neuer activenode erstellt werden? size(): "+self.model.activeNodes.size()+", nodeisEqual: "+nodeisEqual 
+      newAgent = ActiveNode()
+      newAgent.setModel(self.model)
+      newAgent.strnode = self.currentNode
+      newAgent.agentList = ArrayList()
+      newAgent.agentList.add(self.name)
+      self.model.activeNodes.add(newAgent)
+      #if self.name == "a73":
+      #  if self.currentNode == 2328:
+      #      print self.model.modelStep+" - Agent a73 is added NEW activenode HOME agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode
+      #  if self.currentNode == 4676:
+      #      print self.model.modelStep+" - Agent a73 is added NEW activenode WORK or ACT3 agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode
+      #  if self.currentNode == 1768:
+      #      print self.model.modelStep+" - Agent a73 is added NEW activenode ACT1 agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode
+      #  if self.currentNode == 5296:
+      #      print self.model.modelStep+" - Agent a73 is added NEW activenode ACT2 agentlist with status notSafe: "+self.notSafe+ "currentNode: "+self.currentNode+ "self.strnode: "+self.strnode
+  else:
+    self.position = 0
+    #if self.name == "a111":
+    #  print self.model.modelStep+" - Agent a571 is at the end of his route"
+]]>
+</RePastEvolver:action>
+
+  <RePastEvolver:action name="assignNodeInfo" sigReadOnly="false" retType="void" imports="" paramNames="">
+<![CDATA[
+def assignNodeInfo(String tname, int home, int work, int rec1, int rec2, ArrayList pathNodeList, int positionWork, int positionRec1, int positionRec2):
+ 
+  # Assigns the variable values read from the files in initCitizens() to the fields in Citizen class
+  self.name = tname
+  self.home = home
+  self.home = home
+  self.work = work
+  self.rec1 = rec1
+  self.rec2 = rec2
+  self.pathNodes = pathNodeList
+  self.currentNode = self.home
+  self.positionWork = positionWork
+  self.positionRec1 = positionRec1
+  self.positionRec2 = positionRec2
+]]>
+</RePastEvolver:action>
+
+
+<RePastEvolver:parameter name="strnode" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="location" type="Place" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="name" type="java.lang.String" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="home" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="work" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="rec1" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="rec2" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="pathNodes" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="nodeList" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="position" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="currentNode" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="wealth" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="income" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timesRobOther" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timesGotRobbed" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="criminalPropensity" type="boolean" defaultValue="false" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeHome" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeWork" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeRec1" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeRec2" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="activityTimer" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeTraveling" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeNotSafe" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeUnemp" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="employed" type="boolean" defaultValue="true" probe="false" accessible="true" />
+<RePastEvolver:parameter name="onPath" type="boolean" defaultValue="false" probe="false" accessible="true" />
+<RePastEvolver:parameter name="newAtActivity" type="boolean" defaultValue="true" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timeHome" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timeWork" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timeRec1" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timeRec2" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timeToReoffend" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="positionWork" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="positionRec1" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="positionRec2" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="lastActNode" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="lastRobbery" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="notSafe" type="boolean" defaultValue="false" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countRobRec1" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countRobRec2" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countRobStreet" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countRobRec3" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="totalMoneyRobbed" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="totalMoneyIncome" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="initialWealth" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="cumTimeRec3" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="involvedOpport" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="curTimeNextRob" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countOpportAct1" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countOpportAct2" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countOpportAct3" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="countOpportStreet" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timePathHomeWork" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timePathWorkAct1" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timePathAct1Act2" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timePathAct2Home" type="int" defaultValue="0" probe="false" accessible="true" />
+
+<RePastEvolver:schedule_item action="step" tick="1.0" type="1" last="false" target="for all Citizen" id="0"/>
+
+</RePastEvolver:EvolverBean>
+
+<RePastEvolver:EvolverBean type="Compileable" class="class uchicago.src.simbuilder.beans.gis.GenericAgentProducer" name="Cop" superClass="(None)" groupName="cops">
+  <RePastEvolver:action name="step" sigReadOnly="true" retType="void" imports="java.lang.Object java.lang.String java.lang.Float uchicago.src.sim.util.SimUtilities java.util.Arrays java.util.List" paramNames="">
+<![CDATA[
+def step():
+
+  # Normal model: all 200 cops move randomly
+  # Advanced model: 100 cops move randomly
+  # the other 100 copy move on a path visiting crime hotspots of normal model
+  
+  ####################
+  # Random movement
+  ####################
+  if self.isHotspotCop == false:
+  
+    # Every cop moves with each model tick
+    places = self.model.getPlaces()
+    #print "after places.. getplaces"
+    # Identify number of neighbor nodes
+    numNeighs = self.location.myNeighbors.size()  
+    maxValue = numNeighs-1
+
+    # Generate a value
+    index = Random.uniform.nextIntFromTo(0,numNeighs -1)
+
+    # Get the new node and assign it to currentNode field 
+    newNode = self.location.getMyNeighbors().get(index)
+    self.currentNode = int(String.valueOf(newNode))
+  
+    # Assigns the Cop to a new Place
+    nodeFL = Float(self.currentNode)
+    newLocation = (Place)self.model.placeMap.get(nodeFL)
+    self.location = newLocation
+    self.nodesVisited = self.nodesVisited + 1
+  
+    # register that cop visited node
+    # self.location.copStart = self.location.copStart + 1 # means visited By Cop TODO wieder an
+  
+    if not self.visited.contains(newLocation):
+      self.visited.add(newLocation)
+    #print "visited size: "+self.visited.size()+ "location: "+newLocation.strcl_
+  
+  #################################################
+  # Defined movement along a path like citizens
+  #################################################
+  
+  # self.isHotspotCop == true
+  else: 
+    # Cop needs to stay on hotspot
+                 
+    if self.onHotspot == true and self.spentOnHotspot < self.model.HOTSPOTTIMER:
+      
+      # increase timer for time spent on hotspot
+      self.spentOnHotspot = self.spentOnHotspot + 1
+      self.location.copStart = self.location.copStart + 1
+      
+      if self.spentOnHotspot == self.model.HOTSPOTTIMER:
+        self.mustLeaveHotspot = true
+      
+    # cop needs to leave hotspot and move on
+    else:      
+      # reset timer for time spent on hotspot
+      self.spentOnHotspot = 0
+      self.onHotspot = false
+    
+      # Set variables needed for the actions
+      target = 0
+      intPosHotspot = 0
+      strTempNode = ""
+      theStrCurrentNode = ""
+  
+      # cop movement speed is between 1 and 6
+      randMoveSize = Random.uniform.nextIntFromTo(1, 6)
+    
+      # if the cop is not at the end of its path 
+      if self.position < self.pathNodes.size()-1:
+        
+        # set current node
+        theStrCurrentNode = self.pathNodes.get(self.position).toString()
+        self.currentNode = Integer.valueOf(theStrCurrentNode).intValue()
+        theStrCurrentNode = String.valueOf(self.currentNode).toString()
+        strTempNode = theStrCurrentNode
+        
+        #if self.name == "c5":
+        #  print self.model.modelStep+" - Cop c5 is at: "+strTempNode+ " position: "+self.position+" randMoveSize: "+randMoveSize
+          
+        # Assign nonzero number of nodes to move  
+        target = self.position + randMoveSize 
+      
+        # besser cop schrittweise von 1 bis randMoveSize
+        # weiter gehen lassen und bei jedem node checken ob es ein hotspot ist.     
+        intPosHotspot = self.position
+        while intPosHotspot < target and intPosHotspot < self.pathNodes.size():
+          
+          # set possible next node
+          # print self.model.modelStep+" - intPosHotspot: "+intPosHotspot+", target: "+target+", self.pathNodes.size(): "+self.pathNodes.size()
+          strPossibleNode = self.pathNodes.get(intPosHotspot).toString()
+          intPossibleNode = Integer.valueOf(strPossibleNode).intValue()
+          finalStrPossibleNode = String.valueOf(intPossibleNode).toString()
+          
+         # if self.name == "c5":
+         #   print self.model.modelStep+" - Cop c5 finalStrPossibleNode: "+finalStrPossibleNode+" intPosHotspot: "+intPosHotspot+" target: "+target
+            
+         #   if finalStrPossibleNode == "3465":
+         #     print self.model.modelStep+" - 3465 Vergleich intPosHotspot "+intPosHotspot+" target "+target+" mustleave "+self.mustLeaveHotspot
+            
+            #if finalStrPossibleNode == "2587":
+              #print "2587 Vergleich intPosHotspot "+intPosHotspot+" target "+target+" mustleave "+self.mustLeaveHotspot
+          
+         # if self.name == "c5":
+         #   print self.model.modelStep+" - Cop c5 Vergleich intPosHotspot "+intPosHotspot+" target "+target+" mustleave "+self.mustLeaveHotspot+" theStrCurrentNode "+theStrCurrentNode
+          
+          # Dirty fix, damit bei Neubeginn der Route der 1. Knoten als hotspot erkannt wird
+          if (self.mustLeaveHotspot == false or self.endOfPath == true) and self.model.hotspots.contains(finalStrPossibleNode):
+            delta = target-intPosHotspot
+            #if self.name == "c5":
+            #  print self.model.modelStep+" - Cop c5 is at HOTSPOT: "+finalStrPossibleNode+", position: "+intPosHotspot+", target: "+target+" at self.mustLeaveHotspot: "+self.mustLeaveHotspot+" and self.endOfPath: "+self.endOfPath
+              
+            target = intPosHotspot
+            self.onHotspot = true
+            self.endOfPath = false
+            break
+          intPosHotspot = intPosHotspot + 1
+  
+        # Move the agent to a new node
+        # position is position of node on the hotspot route
+        # cop reaches end of route
+        if target >= self.pathNodes.size()-1:
+          self.position = 0
+          self.endOfPath = true
+               
+        # cop has reached a hotspot 
+        elif self.onHotspot == true:          
+          self.position = target
+          i = target
+          # get hotspot ID from hotspot position        
+          strTempNode = self.pathNodes.get(i).toString() 
+          self.currentNode = Integer.valueOf(strTempNode).intValue() # currentNode auf target node id setzen
+          
+          #if self.name == "c5":
+          #  print self.model.modelStep+" - Cop "+self.name+" reached hotspot node "+self.currentNode+" with target: "+target+" and pathNodeSize: "+self.pathNodes.size()
+          
+          endOfPath = false
+         # if strTempNode == "4718": # TODO letzter node der cop route in nicht normalisierter -1 Form!
+         #   self.endOfPath = true
+              
+        # cop is on the path between hotspots
+        else:    
+          self.position = target
+          i = target
+          # get node ID from pathnode list which is not normalized!
+          # print "on path between hotspots with target: "+target+" and pathNodeSize: "+self.pathNodes.size()
+          
+          strTempNode = self.pathNodes.get(i).toString()
+          self.currentNode = Integer.valueOf(strTempNode).intValue() # currentNode auf target node id setzen und normalisieren
+          self.onHotspot = false
+          self.mustLeaveHotspot = false
+          self.endOfPath = false
+          
+          #if self.name == "c5":
+          #  print self.model.modelStep+" - Cop c5 reached normal node "+self.currentNode+" at position "+target
+    
+      # cop is at end of path
+      else:
+        self.position = 0
+        self.endOfPath = true
+        #if self.name == "c5":
+         #   print self.model.modelStep+" - Cop c5 reached end of path "+self.currentNode+" at position "+target
+             
+      # Assigns the Cop to a new Place
+      # muss HashMap(String, String) sein
+      # aus der String ID das Place Objekt holen:  
+      intNode = Integer.valueOf(strTempNode).intValue() # strTempNode ist bereits normalisiert
+      strNode = String.valueOf(intNode).toString()             
+      nodeFL = Float.valueOf(strNode)
+      newLocation = (Place)self.model.placeMap.get(nodeFL) # placeMap ist normalisiert?
+      self.location = newLocation 
+      self.nodesVisited = self.nodesVisited + 1 
+
+      # register that cop visited node
+      self.location.copStart = self.location.copStart + 1
+      
+      self.location.crimStart = 10
+      if self.onHotspot == true:
+        self.location.crimStart = 25
+      if strNode == "5173":
+        self.location.crimStart = 100
+       
+      if self.name == "c5":
+        self.location.crimStart = 75
+        
+      if strNode == "3466":
+        self.location.crimStart = 50    
+      if strNode == "2587":
+        self.location.crimStart = 50        
+      if strNode == "3209":
+        self.location.crimStart = 50
+      if strNode == "6389":
+        self.location.crimStart = 50     
+      if strNode == "4170":
+        self.location.crimStart = 50
+      if strNode == "6386":
+        self.location.crimStart = 50        
+      if strNode == "5694":
+        self.location.crimStart = 50                
+      #if strNode == "5173":
+       # self.location.crimStart = 50                        
+      if strNode == "5843":
+        self.location.crimStart = 50                                  
+      if strNode == "4719":
+        self.location.crimStart = 50                                                                                         
+      
+      if not self.visited.contains(newLocation):
+        self.visited.add(newLocation)
+]]>
+</RePastEvolver:action>
+
+
+<RePastEvolver:parameter name="strnode" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="location" type="Place" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="nodesVisited" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="crimesPrevented" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="visited" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="pathNodes" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="currentNode" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="position" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="isHotspotCop" type="boolean" defaultValue="false" probe="false" accessible="true" />
+<RePastEvolver:parameter name="spentOnHotspot" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="onHotspot" type="boolean" defaultValue="false" probe="false" accessible="true" />
+<RePastEvolver:parameter name="name" type="java.lang.String" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="mustLeaveHotspot" type="boolean" defaultValue="false" probe="false" accessible="true" />
+<RePastEvolver:parameter name="endOfPath" type="boolean" defaultValue="false" probe="false" accessible="true" />
+
+<RePastEvolver:schedule_item action="step" tick="1.0" type="1" last="false" target="for all Cop" id="1"/>
+
+</RePastEvolver:EvolverBean>
+
+<RePastEvolver:EvolverBean type="Compileable" class="class uchicago.src.simbuilder.beans.gis.GenericAgentProducer" name="ActiveNode" superClass="(None)" groupName="activeNodes">
+  <RePastEvolver:action name="step" sigReadOnly="true" retType="void" imports="" paramNames="">
+<![CDATA[
+def step():
+]]>
+</RePastEvolver:action>
+
+
+<RePastEvolver:parameter name="strnode" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="agentList" type="java.util.ArrayList" defaultValue="" probe="false" accessible="true" />
+
+
+</RePastEvolver:EvolverBean>
+
+<RePastEvolver:EvolverBean type="Compileable" class="class uchicago.src.simbuilder.beans.gis.GenericAgentProducer" name="Robbery" superClass="(None)" groupName="robberies">
+  <RePastEvolver:action name="step" sigReadOnly="true" retType="void" imports="" paramNames="">
+<![CDATA[
+def step():
+]]>
+</RePastEvolver:action>
+
+
+<RePastEvolver:parameter name="number" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="timeOfDay" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="locationOffender" type="java.lang.String" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="locationVictim" type="java.lang.String" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="amountRobbed" type="int" defaultValue="0" probe="false" accessible="true" />
+<RePastEvolver:parameter name="location" type="int" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="nameVictim" type="java.lang.String" defaultValue="" probe="false" accessible="true" />
+<RePastEvolver:parameter name="nameOffender" type="java.lang.String" defaultValue="" probe="false" accessible="true" />
+
+<RePastEvolver:schedule_item action="step" tick="1.0" type="1" last="false" target="for all Robbery" id="2"/>
+
+</RePastEvolver:EvolverBean>
+
+
+</RePastEvolver:EvolverModel>
+</RePastEvolver:EvolverProject>
+</RePastEvolver:EvolverModelSpec>

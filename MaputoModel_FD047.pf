@@ -1,0 +1,69 @@
+runs: 1
+NUM_PLACES {
+  set: 7001
+}
+
+COPS {
+  set: 200
+}
+
+AGENTS {
+  set: 1000
+}
+
+CITIZENS {
+  set: 1000
+}
+
+TIME_SAFE {
+  set: 74.75
+}
+
+TIME_WORK {
+  set: 420
+}
+
+TIMETO_REOFFEND {
+  set: 120
+}
+
+NORM_WEALTH {
+  set: 475
+}
+
+UNEMP_RATE {
+  set: 24.5
+}
+
+NORM_INCOME {
+  set: 19.5
+}
+
+PROPENSITY {
+  set: 10
+}
+
+MODE {
+  set_string: D
+}
+
+MODELTYPE {
+  set: 0
+}
+
+HOTSPOTTIMER {
+  set: 10
+}
+
+MODE_MULTIPLICATOR {
+  set: 1
+}
+
+AMOUNT_ROBBED {
+  set: 4
+}
+
+TUNEFACTOR {
+  set: 41
+}
+
